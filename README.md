@@ -1,56 +1,83 @@
-# Welcome to your Expo app 👋
+# Leichtathletik App 🏃
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+App für Schweizer Leichtathletik-Trainingsgruppen: Trainings­planung mit An-/Abmeldung, Leistungstagebuch (Training **und** Wettkampf) mit Bestleistungen und Verlauf, sowie Wettkampfliste mit Anmeldeschluss-Erinnerungen.
 
-## Get started
+**Stack:** Expo (React Native) + TypeScript + Expo Router · Supabase (Postgres, Auth, RLS, Edge Functions) · Expo Push Notifications
 
-1. Install dependencies
+## Einmalige Einrichtung
 
-   ```bash
-   npm install
-   ```
+### 1. Supabase-Projekt erstellen
 
-2. Start the app
+1. Auf [supabase.com](https://supabase.com) ein kostenloses Projekt erstellen (Region: `eu-central` empfohlen).
+2. Im Dashboard: **SQL Editor** → Inhalt von [`supabase/schema.sql`](supabase/schema.sql) einfügen und ausführen. Das legt alle Tabellen, Sicherheitsregeln (RLS) und die Disziplinen-Liste an.
+3. Für die Pilotphase: **Authentication → Sign In / Up → Email** → „Confirm email" **deaktivieren** (sonst muss jede:r zuerst einen Bestätigungslink klicken).
 
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+### 2. App konfigurieren
 
 ```bash
-npm run reset-project
+cp .env.example .env
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+Dann in `.env` die Werte aus **Project Settings → API** eintragen (Project URL + anon public key).
 
-### Other setup steps
+### 3. Starten
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+```bash
+npm install
+npx expo start
+```
 
-## Learn more
+- **Handy:** QR-Code mit der [Expo Go](https://expo.dev/go)-App scannen (gleiches WLAN).
+- **Browser:** `w` drücken (eingeschränkt — Datums-Picker und Push funktionieren nur auf dem Handy).
 
-To learn more about developing your project with Expo, look at the following resources:
+**Erster Test:** Konto registrieren → als Coach „Gruppe erstellen" → mit einem zweiten Konto (z.B. im Browser) per Einladungscode beitreten.
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+## Push-Benachrichtigungen (optional, für den Pilot)
 
-## Join the community
+Push braucht ein verknüpftes EAS-Projekt und läuft **nicht in Expo Go auf Android** (nur im Development/EAS Build):
 
-Join our community of developers creating universal apps.
+1. `npx eas init` (kostenloses Expo-Konto nötig) — verknüpft das Projekt.
+2. Supabase CLI installieren, dann:
+   ```bash
+   supabase functions deploy notify-training-change --no-verify-jwt
+   supabase functions deploy deadline-reminders --no-verify-jwt
+   supabase secrets set WEBHOOK_SECRET=<zufälliger-string>
+   ```
+3. Im Supabase-Dashboard:
+   - **Database → Webhooks**: Webhook auf Tabelle `trainings` (INSERT + UPDATE) → Edge Function `notify-training-change`, mit HTTP-Header `x-webhook-secret: <derselbe-string>`. → Benachrichtigt die Gruppe bei neuen/geänderten/abgesagten Trainings.
+   - **Cron-Job** (Integrations → Cron): täglich 08:00 (`0 8 * * *`) → Edge Function `deadline-reminders`, gleicher Header. → Erinnert 3 Tage und 1 Tag vor jedem Anmeldeschluss.
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+## Verteilung an die Trainingsgruppe (Pilot)
+
+```bash
+npx eas build --profile preview --platform android   # APK zum direkten Installieren
+npx eas build --platform ios                          # danach via TestFlight verteilen
+```
+
+Für iOS braucht es einen Apple-Developer-Account (99 $/Jahr); Android-APKs lassen sich direkt teilen.
+
+## Projektstruktur
+
+```
+src/
+  app/              Screens (Expo Router, dateibasiertes Routing)
+    (auth)/         Login + Registrierung
+    (tabs)/         Haupt-Tabs: Training, Leistungen, Wettkämpfe, Profil
+    training/       Training erstellen/ansehen/bearbeiten
+    leistung/       Leistung eintragen
+    wettkampf/      Wettkampf erstellen/bearbeiten
+    onboarding.tsx  Gruppe erstellen oder per Code beitreten
+  components/       Wiederverwendbare UI-Bausteine
+  lib/              Supabase-Client, Auth-Context, Typen, Formatierung
+supabase/
+  schema.sql        Komplettes Datenbankschema inkl. RLS-Policies
+  functions/        Edge Functions für Push-Benachrichtigungen
+```
+
+## Architektur-Entscheidungen (Kurzfassung)
+
+- **Rollen pro Gruppe** (`group_members.role`): Coach oder Athlet:in — kein globales Rollensystem.
+- **Sicherheit über Row Level Security**: Der `anon`-Key darf in die App, weil jede Tabelle Policies hat (z.B. sehen nur Gruppenmitglieder die Trainings; Leistungen sieht nur die Person selbst + ihr Coach).
+- **Gruppenbeitritt über RPC** (`join_group`): Nicht-Mitglieder dürfen Gruppen nicht lesen; der Einladungscode ist der Zugangsschlüssel.
+- **Bestleistungen werden berechnet, nicht gespeichert** — eine Quelle der Wahrheit (`performances`).
+- **Kein Chat** — bewusste Entscheidung, WhatsApp bleibt für Informelles.
